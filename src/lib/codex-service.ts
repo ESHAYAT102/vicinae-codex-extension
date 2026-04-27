@@ -659,8 +659,8 @@ async function readAmbientCodexSessions(): Promise<Session[]> {
 			parseAmbientSessionFile(sessionFile, indexById),
 		),
 	);
-	const parsedSessions = sessions.filter(
-		(session): session is Session => Boolean(session),
+	const parsedSessions = sessions.filter((session): session is Session =>
+		Boolean(session),
 	);
 	const parsedIds = new Set(
 		parsedSessions
@@ -698,7 +698,9 @@ async function parseAmbientSessionFile(
 			.filter(Boolean)
 			.map((line) => JSON.parse(line) as AmbientSessionRecord);
 		const metaRecord = records.find((record) => record.type === "session_meta");
-		const metaPayload = metaRecord?.payload as AmbientSessionMetaPayload | undefined;
+		const metaPayload = metaRecord?.payload as
+			| AmbientSessionMetaPayload
+			| undefined;
 		const codexSessionId = metaPayload?.id?.trim();
 		if (!codexSessionId) {
 			return undefined;
@@ -722,7 +724,9 @@ async function parseAmbientSessionFile(
 			id: makeAmbientSessionId(codexSessionId),
 			title:
 				indexEntry?.thread_name?.trim() ||
-				makeTitleFromPrompt(messages.find((message) => message.role === "user")?.text || "") ||
+				makeTitleFromPrompt(
+					messages.find((message) => message.role === "user")?.text || "",
+				) ||
 				"Untitled session",
 			createdAt,
 			updatedAt,
@@ -739,7 +743,9 @@ async function parseAmbientSessionFile(
 	}
 }
 
-function parseAmbientMessages(records: AmbientSessionRecord[]): SessionMessage[] {
+function parseAmbientMessages(
+	records: AmbientSessionRecord[],
+): SessionMessage[] {
 	const messages: SessionMessage[] = [];
 
 	for (const record of records) {
@@ -803,7 +809,10 @@ function parseAmbientMessages(records: AmbientSessionRecord[]): SessionMessage[]
 function summarizeAmbientAttachments(
 	payload: AmbientEventPayload,
 ): AttachmentSummary[] | undefined {
-	const imageAttachments = [...(payload.images ?? []), ...(payload.local_images ?? [])]
+	const imageAttachments = [
+		...(payload.images ?? []),
+		...(payload.local_images ?? []),
+	]
 		.filter(Boolean)
 		.map((imagePath) => ({
 			name: basename(imagePath),
@@ -861,9 +870,16 @@ function mergeSessions(localSessions: Session[], ambientSessions: Session[]) {
 			title: localSession.title?.trim() || ambientSession.title,
 			model: ambientSession.model || localSession.model,
 			workDirectory: ambientSession.workDirectory || localSession.workDirectory,
-			codexSessionId: ambientSession.codexSessionId || localSession.codexSessionId,
-			createdAt: chooseEarlierDate(localSession.createdAt, ambientSession.createdAt),
-			updatedAt: chooseLaterDate(localSession.updatedAt, ambientSession.updatedAt),
+			codexSessionId:
+				ambientSession.codexSessionId || localSession.codexSessionId,
+			createdAt: chooseEarlierDate(
+				localSession.createdAt,
+				ambientSession.createdAt,
+			),
+			updatedAt: chooseLaterDate(
+				localSession.updatedAt,
+				ambientSession.updatedAt,
+			),
 			messages:
 				ambientSession.messages.length > 0
 					? ambientSession.messages

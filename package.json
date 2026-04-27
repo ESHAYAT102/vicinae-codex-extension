@@ -1,14 +1,16 @@
 {
   "$schema": "https://raw.githubusercontent.com/vicinaehq/vicinae/refs/heads/main/extra/schemas/extension.json",
   "name": "codex",
-  "title": "OpenAI Codex",
+  "title": "Codex",
   "description": "Chat with ChatGPT Codex in Vicinae using local Codex CLI auth, attachments, and session management.",
-  "categories": ["Developer Tools"],
+  "categories": [
+    "Developer Tools"
+  ],
   "license": "MIT",
   "author": "ESHAYAT102",
   "contributors": [],
   "pastContributors": [],
-  "icon": "assets/icon.png",
+  "icon": "icon.png",
   "commands": [
     {
       "name": "codex",
