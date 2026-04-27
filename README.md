@@ -58,8 +58,8 @@ Behavior:
 
 - default work directory: `~/code/codex/`
 - work directory auto-created if missing
-- first prompt stays temporary until you send a follow-up, then is permanently deleted if you leave without continuing
-- one-shot chats do not appear in saved sessions
+- first prompt stays temporary until you send a follow-up
+- temporary chats can auto-delete after configured inactivity window
 - follow-up prompts reuse saved session work directory
 - follow-up form hides session-title and work-directory fields
 - `caveman` auto-selected by default if installed
@@ -89,6 +89,14 @@ Choose reasoning effort:
 - `medium`
 - `high`
 - `xhigh`
+
+### `Settings`
+
+Configure:
+
+- default skills for new chats
+- default system prompt prepended to every chat
+- temporary chat auto-delete timeout: `Never`, `5`, `10`, `12`, `20`, `25`, or `30` minutes
 
 ## Attachments
 

@@ -32,6 +32,11 @@ declare namespace Preferences {
 	export type Thinking = ExtensionPreferences & {
 		
 	}
+
+	/** Command: Settings */
+	export type Settings = ExtensionPreferences & {
+		
+	}
 }
 
 declare namespace Arguments {
@@ -52,6 +57,11 @@ declare namespace Arguments {
 
 	/** Command: Thinking */
 	export type Thinking = {
+		
+	}
+
+	/** Command: Settings */
+	export type Settings = {
 		
 	}
 }

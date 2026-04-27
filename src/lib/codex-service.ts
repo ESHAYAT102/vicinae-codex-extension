@@ -54,6 +54,12 @@ export type ComposeFormValues = {
 	workDirectory?: string;
 };
 
+export type ChatSettings = {
+	defaultSkills: string[];
+	systemPrompt: string;
+	inactiveDeleteMinutes: number;
+};
+
 export type CodexModel = {
 	slug: string;
 	displayName: string;
@@ -126,6 +132,12 @@ const MAX_TOTAL_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const MAX_FILE_COUNT = 100;
 const SELECTED_MODEL_KEY = "selected-codex-model";
 const SELECTED_THINKING_KEY = "selected-codex-thinking";
+const DEFAULT_SKILLS_KEY = "default-codex-skills";
+const SYSTEM_PROMPT_KEY = "default-codex-system-prompt";
+const INACTIVE_DELETE_MINUTES_KEY = "inactive-chat-delete-minutes";
+const INACTIVE_DELETE_NEVER_VALUE = 0;
+const INACTIVE_DELETE_MINUTE_OPTIONS = [0, 5, 10, 12, 20, 25, 30] as const;
+const DEFAULT_INACTIVE_DELETE_MINUTES = 5;
 const SKILL_ROOTS = [
 	join(process.env.HOME ?? "", ".codex", "skills"),
 	join(process.env.HOME ?? "", ".agents", "skills"),
@@ -136,7 +148,8 @@ export async function readSessions(): Promise<Session[]> {
 		readStoredSessions(),
 		readAmbientCodexSessions(),
 	]);
-	return mergeSessions(storedSessions, ambientSessions);
+	const mergedSessions = mergeSessions(storedSessions, ambientSessions);
+	return await pruneInactiveTemporarySessions(mergedSessions);
 }
 
 async function readStoredSessions(): Promise<Session[]> {
@@ -231,8 +244,11 @@ export async function submitPrompt(
 			? sessions.find((session) => session.id === targetSession)
 			: targetSession;
 	const prefs = readPreferences();
-	const selectedModel = await getSelectedModel();
-	const selectedThinking = await getSelectedThinking();
+	const [selectedModel, selectedThinking, settings] = await Promise.all([
+		getSelectedModel(),
+		getSelectedThinking(),
+		getChatSettings(),
+	]);
 	const model =
 		selectedModel ||
 		prefs.openaiModel?.trim() ||
@@ -266,6 +282,7 @@ export async function submitPrompt(
 		thinkingLevel: selectedThinking,
 		userPrompt: prompt,
 		selectedSkills,
+		systemPrompt: settings.systemPrompt,
 		attachments: preparedAttachments,
 		workDirectory,
 	});
@@ -301,16 +318,14 @@ export async function submitPrompt(
 				messages: [userMessage, assistantMessage],
 			};
 
-	if (!nextSession.isTemporary) {
-		const nextSessions = existingSession
-			? sessions.some((session) => session.id === existingSession.id)
-				? sessions.map((session) =>
-						session.id === existingSession.id ? nextSession : session,
-					)
-				: [nextSession, ...sessions]
-			: [nextSession, ...sessions];
-		await writeSessions(nextSessions);
-	}
+	const nextSessions = existingSession
+		? sessions.some((session) => session.id === existingSession.id)
+			? sessions.map((session) =>
+					session.id === existingSession.id ? nextSession : session,
+				)
+			: [nextSession, ...sessions]
+		: [nextSession, ...sessions];
+	await writeSessions(nextSessions);
 
 	return nextSession;
 }
@@ -420,8 +435,61 @@ export async function getAvailableSkills(): Promise<string[]> {
 }
 
 export async function getDefaultSkillSelections(): Promise<string[]> {
+	const storedSkills = parseStoredStringArray(
+		await LocalStorage.getItem<string>(DEFAULT_SKILLS_KEY),
+	);
 	const skills = await getAvailableSkills();
-	return skills.includes("caveman") ? ["caveman"] : [];
+	const fallbackSkills = skills.includes("caveman") ? ["caveman"] : [];
+	return (storedSkills ?? fallbackSkills).filter((skill) => skills.includes(skill));
+}
+
+export async function getDefaultSystemPrompt() {
+	return (await LocalStorage.getItem<string>(SYSTEM_PROMPT_KEY)) ?? "";
+}
+
+export function getInactiveDeleteMinuteOptions() {
+	return [...INACTIVE_DELETE_MINUTE_OPTIONS];
+}
+
+export async function getInactiveDeleteMinutes() {
+	const storedMinutes = Number(
+		await LocalStorage.getItem<string>(INACTIVE_DELETE_MINUTES_KEY),
+	);
+	if (
+		INACTIVE_DELETE_MINUTE_OPTIONS.includes(
+			storedMinutes as (typeof INACTIVE_DELETE_MINUTE_OPTIONS)[number],
+		)
+	) {
+		return storedMinutes;
+	}
+	return DEFAULT_INACTIVE_DELETE_MINUTES;
+}
+
+export async function getChatSettings(): Promise<ChatSettings> {
+	const [defaultSkills, systemPrompt, inactiveDeleteMinutes] = await Promise.all([
+		getDefaultSkillSelections(),
+		getDefaultSystemPrompt(),
+		getInactiveDeleteMinutes(),
+	]);
+	return {
+		defaultSkills,
+		systemPrompt,
+		inactiveDeleteMinutes,
+	};
+}
+
+export async function saveChatSettings(settings: ChatSettings) {
+	await Promise.all([
+		LocalStorage.setItem(
+			DEFAULT_SKILLS_KEY,
+			JSON.stringify(settings.defaultSkills),
+		),
+		LocalStorage.setItem(SYSTEM_PROMPT_KEY, settings.systemPrompt.trim()),
+		LocalStorage.setItem(
+			INACTIVE_DELETE_MINUTES_KEY,
+			String(settings.inactiveDeleteMinutes),
+		),
+	]);
 }
 
 export async function getSelectedModel() {
@@ -483,6 +551,7 @@ async function runCodexPrompt({
 	thinkingLevel,
 	userPrompt,
 	selectedSkills,
+	systemPrompt,
 	attachments,
 	workDirectory,
 }: {
@@ -491,6 +560,7 @@ async function runCodexPrompt({
 	thinkingLevel?: CodexThinkingLevel;
 	userPrompt: string;
 	selectedSkills: string[];
+	systemPrompt?: string;
 	attachments: CodexPreparedAttachments;
 	workDirectory?: string;
 }): Promise<CodexRunResult> {
@@ -499,6 +569,7 @@ async function runCodexPrompt({
 	const beforeIndex = await readCodexSessionIndex(getAmbientCodexHome());
 	const outputFile = join(OUTPUT_DIR, `${createId("codex-output")}.txt`);
 	const prompt = buildCodexPrompt({
+		systemPrompt,
 		userPrompt,
 		selectedSkills,
 		attachmentPromptBlock: attachments.promptBlock,
@@ -1120,15 +1191,20 @@ async function prepareAttachments(
 }
 
 function buildCodexPrompt({
+	systemPrompt,
 	userPrompt,
 	selectedSkills,
 	attachmentPromptBlock,
 }: {
+	systemPrompt?: string;
 	userPrompt: string;
 	selectedSkills: string[];
 	attachmentPromptBlock: string;
 }) {
 	return [
+		systemPrompt?.trim()
+			? ["System instructions:", systemPrompt.trim()].join("\n")
+			: "",
 		...selectedSkills.map((skill) => `$${skill}`),
 		userPrompt.trim(),
 		attachmentPromptBlock.trim(),
@@ -1164,6 +1240,62 @@ async function normalizeSelectedSkills(skills: string[]) {
 	}
 
 	return await getDefaultSkillSelections();
+}
+
+function parseStoredStringArray(raw: string | undefined) {
+	if (!raw?.trim()) {
+		return undefined;
+	}
+
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		return Array.isArray(parsed)
+			? parsed.filter((value): value is string => typeof value === "string")
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function pruneInactiveTemporarySessions(sessions: Session[]) {
+	const inactiveDeleteMinutes = await getInactiveDeleteMinutes();
+	if (inactiveDeleteMinutes === INACTIVE_DELETE_NEVER_VALUE) {
+		return sessions;
+	}
+	const expiredSessions = sessions.filter((session) =>
+		isTemporarySessionExpired(session, inactiveDeleteMinutes),
+	);
+	if (expiredSessions.length === 0) {
+		return sessions;
+	}
+
+	const expiredIds = new Set(expiredSessions.map((session) => session.id));
+	const nextSessions = sessions.filter((session) => !expiredIds.has(session.id));
+	await writeSessions(nextSessions.filter((session) => !session.id.startsWith("ambient_")));
+	await Promise.all(
+		expiredSessions.map((session) =>
+			session.codexSessionId
+				? deleteAmbientCodexArtifacts(session.codexSessionId)
+				: Promise.resolve(),
+		),
+	);
+	return nextSessions;
+}
+
+function isTemporarySessionExpired(
+	session: Session,
+	inactiveDeleteMinutes: number,
+) {
+	if (!session.isTemporary) {
+		return false;
+	}
+
+	const updatedAtMs = new Date(session.updatedAt).getTime();
+	if (Number.isNaN(updatedAtMs)) {
+		return false;
+	}
+
+	return Date.now() - updatedAtMs >= inactiveDeleteMinutes * 60 * 1000;
 }
 
 async function validateWorkDirectory(workDirectory?: string) {
