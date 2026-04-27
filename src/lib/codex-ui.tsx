@@ -1,4 +1,5 @@
 import {
+	Alert,
 	Action,
 	ActionPanel,
 	confirmAlert,
@@ -14,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import {
 	clearSelectedModel,
 	clearSelectedThinking,
+	deleteTemporarySession,
 	type ComposeFormValues,
 	deleteSessionPermanently,
 	formatWorkDirectoryForDisplay,
@@ -41,6 +43,7 @@ import {
 
 type AskFormProps = {
 	defaultSessionId?: string;
+	defaultSession?: Session;
 	draftValues?: Partial<ComposeFormValues>;
 };
 
@@ -48,7 +51,11 @@ type RenameFormValues = {
 	title: string;
 };
 
-export function AskCodexForm({ defaultSessionId, draftValues }: AskFormProps) {
+export function AskCodexForm({
+	defaultSessionId,
+	defaultSession,
+	draftValues,
+}: AskFormProps) {
 	const { push } = useNavigation();
 	const [session, setSession] = useState<Session>();
 	const [availableSkills, setAvailableSkills] = useState<string[]>([]);
@@ -61,7 +68,7 @@ export function AskCodexForm({ defaultSessionId, draftValues }: AskFormProps) {
 	const [isFormReady, setIsFormReady] = useState(false);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const isSubmittingRef = useRef(false);
-	const isReply = Boolean(defaultSessionId);
+	const isReply = Boolean(defaultSessionId || defaultSession);
 
 	useEffect(() => {
 		let isCancelled = false;
@@ -71,7 +78,9 @@ export function AskCodexForm({ defaultSessionId, draftValues }: AskFormProps) {
 			const [skills, defaults, nextSession] = await Promise.all([
 				getAvailableSkills(),
 				getDefaultSkillSelections(),
-				defaultSessionId
+				defaultSession
+					? Promise.resolve(defaultSession)
+					: defaultSessionId
 					? getSessionById(defaultSessionId)
 					: Promise.resolve(undefined),
 			]);
@@ -96,7 +105,7 @@ export function AskCodexForm({ defaultSessionId, draftValues }: AskFormProps) {
 		return () => {
 			isCancelled = true;
 		};
-	}, [defaultSessionId, draftValues?.skills]);
+	}, [defaultSession, defaultSessionId, draftValues?.skills]);
 
 	return (
 		<Form
@@ -137,13 +146,18 @@ export function AskCodexForm({ defaultSessionId, draftValues }: AskFormProps) {
 												? selectedSkills
 												: defaultSkills,
 									},
-									defaultSessionId,
+									defaultSession ?? defaultSessionId,
 								);
 								toast.style = Toast.Style.Success;
 								toast.title = "Reply received";
 								toast.message = nextSession.title;
 								await toast.update();
-								push(<SessionDetailScreen sessionId={nextSession.id} />);
+								push(
+									<SessionDetailScreen
+										sessionId={nextSession.id}
+										initialSession={nextSession}
+									/>,
+								);
 							} catch (error) {
 								toast.style = Toast.Style.Failure;
 								toast.title = "Codex request failed";
@@ -158,7 +172,7 @@ export function AskCodexForm({ defaultSessionId, draftValues }: AskFormProps) {
 					/>
 					<Action.Push
 						title="Open Sessions"
-						icon={Icon.List}
+						icon={Icon.AppWindowList}
 						target={<SessionsBrowser />}
 					/>
 					<Action.Push
@@ -630,15 +644,23 @@ export function ThinkingBrowser() {
 	);
 }
 
-export function SessionDetailScreen({ sessionId }: { sessionId: string }) {
+export function SessionDetailScreen({
+	sessionId,
+	initialSession,
+}: {
+	sessionId: string;
+	initialSession?: Session;
+}) {
 	const { push, pop } = useNavigation();
-	const [session, setSession] = useState<Session>();
+	const [session, setSession] = useState<Session | undefined>(initialSession);
 	const [isLoading, setIsLoading] = useState(true);
+	const preserveTemporarySessionRef = useRef(false);
 
 	async function loadSession() {
 		setIsLoading(true);
 		try {
-			setSession(await getSessionById(sessionId));
+			const nextSession = await getSessionById(sessionId);
+			setSession(nextSession ?? initialSession);
 		} finally {
 			setIsLoading(false);
 		}
@@ -646,7 +668,17 @@ export function SessionDetailScreen({ sessionId }: { sessionId: string }) {
 
 	useEffect(() => {
 		void loadSession();
-	}, [sessionId]);
+	}, [initialSession, sessionId]);
+
+	useEffect(() => {
+		return () => {
+			if (!initialSession?.isTemporary || preserveTemporarySessionRef.current) {
+				return;
+			}
+
+			void deleteTemporarySession(initialSession);
+		};
+	}, [initialSession]);
 
 	if (!session) {
 		return (
@@ -673,9 +705,17 @@ export function SessionDetailScreen({ sessionId }: { sessionId: string }) {
 			actions={
 				<SessionActions
 					session={session}
-					onRefresh={loadSession}
-					onEnter={() => loadSession()}
-					onReply={() => push(<AskCodexForm defaultSessionId={session.id} />)}
+						onRefresh={loadSession}
+						onEnter={() => loadSession()}
+						onReply={() => {
+							if (session.isTemporary) {
+								preserveTemporarySessionRef.current = true;
+								push(<AskCodexForm defaultSession={session} />);
+								return;
+							}
+
+							push(<AskCodexForm defaultSessionId={session.id} />);
+						}}
 					onRename={() =>
 						push(<RenameSessionForm session={session} onSaved={loadSession} />)
 					}
@@ -703,55 +743,67 @@ function SessionActions({
 }) {
 	return (
 		<ActionPanel>
-			<Action title="Chat Follow-up" icon={Icon.Message} onAction={onReply} />
+			<Action
+				title="Chat Follow-up"
+				icon={Icon.SpeechBubble}
+				onAction={onReply}
+			/>
 			<Action
 				title="Refresh Session"
 				icon={Icon.ArrowClockwise}
 				onAction={onEnter}
 			/>
-			<Action title="Rename Session" icon={Icon.Pencil} onAction={onRename} />
-			<Action
-				title={session.archivedAt ? "Unarchive Session" : "Archive Session"}
-				icon={session.archivedAt ? Icon.ArrowClockwise : Icon.Box}
-				onAction={async () => {
-					await setSessionArchived(session.id, !session.archivedAt);
-					await showToast({
-						style: Toast.Style.Success,
-						title: session.archivedAt ? "Session restored" : "Session archived",
-						message: session.title,
-					});
-					await onRefresh();
-				}}
-			/>
-			<Action
-				title="Delete Permanently"
-				icon={Icon.Trash}
-				style={Action.Style.Destructive}
-				onAction={async () => {
-					const confirmed = await confirmAlert({
-						title: `Delete "${session.title}" permanently?`,
-						message:
-							"This removes session from Vicinae storage and also deletes matching Codex session artifacts when found.",
-						primaryAction: {
-							title: "Delete Permanently",
-							style: "destructive",
-						},
-					});
-					if (!confirmed) {
-						return;
-					}
-					await deleteSessionPermanently(session.id);
-					await showToast({
-						style: Toast.Style.Success,
-						title: "Session deleted",
-						message: session.title,
-					});
-					if (onDeleted) {
-						onDeleted();
-					}
-					await onRefresh();
-				}}
-			/>
+			{session.isTemporary ? null : (
+				<Action title="Rename Session" icon={Icon.Pencil} onAction={onRename} />
+			)}
+			{session.isTemporary ? null : (
+				<Action
+					title={session.archivedAt ? "Unarchive Session" : "Archive Session"}
+					icon={session.archivedAt ? Icon.ArrowClockwise : Icon.Box}
+					onAction={async () => {
+						await setSessionArchived(session.id, !session.archivedAt);
+						await showToast({
+							style: Toast.Style.Success,
+							title: session.archivedAt
+								? "Session restored"
+								: "Session archived",
+							message: session.title,
+						});
+						await onRefresh();
+					}}
+				/>
+			)}
+			{session.isTemporary ? null : (
+				<Action
+					title="Delete Permanently"
+					icon={Icon.Trash}
+					style={Action.Style.Destructive}
+					onAction={async () => {
+						const confirmed = await confirmAlert({
+							title: `Delete "${session.title}" permanently?`,
+							message:
+								"This removes session from Vicinae storage and also deletes matching Codex session artifacts when found.",
+							primaryAction: {
+								title: "Delete Permanently",
+								style: Alert.ActionStyle.Destructive,
+							},
+						});
+						if (!confirmed) {
+							return;
+						}
+						await deleteSessionPermanently(session.id);
+						await showToast({
+							style: Toast.Style.Success,
+							title: "Session deleted",
+							message: session.title,
+						});
+						if (onDeleted) {
+							onDeleted();
+						}
+						await onRefresh();
+					}}
+				/>
+			)}
 			<Action.CopyToClipboard
 				title="Copy Transcript"
 				content={renderTranscriptMarkdown(session)}

@@ -58,6 +58,8 @@ Behavior:
 
 - default work directory: `~/code/codex/`
 - work directory auto-created if missing
+- first prompt stays temporary until you send a follow-up, then is permanently deleted if you leave without continuing
+- one-shot chats do not appear in saved sessions
 - follow-up prompts reuse saved session work directory
 - follow-up form hides session-title and work-directory fields
 - `caveman` auto-selected by default if installed

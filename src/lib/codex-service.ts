@@ -38,6 +38,7 @@ export type Session = {
 	workDirectory?: string;
 	codexSessionId?: string;
 	archivedAt?: string;
+	isTemporary?: boolean;
 	messages: SessionMessage[];
 };
 
@@ -207,9 +208,17 @@ export async function deleteSessionPermanently(sessionId: string) {
 	}
 }
 
+export async function deleteTemporarySession(session?: Session) {
+	if (!session?.isTemporary || !session.codexSessionId) {
+		return;
+	}
+
+	await deleteAmbientCodexArtifacts(session.codexSessionId);
+}
+
 export async function submitPrompt(
 	values: ComposeFormValues,
-	targetSessionId?: string,
+	targetSession?: string | Session,
 ): Promise<Session> {
 	const prompt = values.prompt.trim();
 	if (!prompt) {
@@ -217,9 +226,10 @@ export async function submitPrompt(
 	}
 
 	const sessions = await readSessions();
-	const existingSession = targetSessionId
-		? sessions.find((session) => session.id === targetSessionId)
-		: undefined;
+	const existingSession =
+		typeof targetSession === "string"
+			? sessions.find((session) => session.id === targetSession)
+			: targetSession;
 	const prefs = readPreferences();
 	const selectedModel = await getSelectedModel();
 	const selectedThinking = await getSelectedThinking();
@@ -276,6 +286,7 @@ export async function submitPrompt(
 				codexSessionId:
 					runResult.codexSessionId ?? existingSession.codexSessionId,
 				updatedAt: assistantMessage.createdAt,
+				isTemporary: false,
 				messages: [...existingSession.messages, userMessage, assistantMessage],
 			}
 		: {
@@ -286,16 +297,21 @@ export async function submitPrompt(
 				model: runResult.model,
 				workDirectory,
 				codexSessionId: runResult.codexSessionId,
+				isTemporary: true,
 				messages: [userMessage, assistantMessage],
 			};
 
-	const nextSessions = existingSession
-		? sessions.map((session) =>
-				session.id === existingSession.id ? nextSession : session,
-			)
-		: [nextSession, ...sessions];
+	if (!nextSession.isTemporary) {
+		const nextSessions = existingSession
+			? sessions.some((session) => session.id === existingSession.id)
+				? sessions.map((session) =>
+						session.id === existingSession.id ? nextSession : session,
+					)
+				: [nextSession, ...sessions]
+			: [nextSession, ...sessions];
+		await writeSessions(nextSessions);
+	}
 
-	await writeSessions(nextSessions);
 	return nextSession;
 }
 
@@ -914,10 +930,20 @@ function mergeSessions(localSessions: Session[], ambientSessions: Session[]) {
 	}
 
 	for (const ambientSession of ambientByCodexId.values()) {
-		mergedSessions.push(ambientSession);
+		if (isPersistentAmbientSession(ambientSession)) {
+			mergedSessions.push(ambientSession);
+		}
 	}
 
 	return mergedSessions;
+}
+
+function isPersistentAmbientSession(session: Session) {
+	return countUserMessages(session) > 1;
+}
+
+function countUserMessages(session: Session) {
+	return session.messages.filter((message) => message.role === "user").length;
 }
 
 function findAmbientMatchForLocalSession(
