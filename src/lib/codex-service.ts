@@ -440,7 +440,9 @@ export async function getDefaultSkillSelections(): Promise<string[]> {
 	);
 	const skills = await getAvailableSkills();
 	const fallbackSkills = skills.includes("caveman") ? ["caveman"] : [];
-	return (storedSkills ?? fallbackSkills).filter((skill) => skills.includes(skill));
+	return (storedSkills ?? fallbackSkills).filter((skill) =>
+		skills.includes(skill),
+	);
 }
 
 export async function getDefaultSystemPrompt() {
@@ -466,11 +468,12 @@ export async function getInactiveDeleteMinutes() {
 }
 
 export async function getChatSettings(): Promise<ChatSettings> {
-	const [defaultSkills, systemPrompt, inactiveDeleteMinutes] = await Promise.all([
-		getDefaultSkillSelections(),
-		getDefaultSystemPrompt(),
-		getInactiveDeleteMinutes(),
-	]);
+	const [defaultSkills, systemPrompt, inactiveDeleteMinutes] =
+		await Promise.all([
+			getDefaultSkillSelections(),
+			getDefaultSystemPrompt(),
+			getInactiveDeleteMinutes(),
+		]);
 	return {
 		defaultSkills,
 		systemPrompt,
@@ -1184,9 +1187,7 @@ async function prepareAttachments(
 		imagePaths,
 		additionalWritableDirs: [...additionalDirs],
 		promptBlock:
-			promptLines.length > 0
-				? ["Attachments:", ...promptLines].join("\n")
-				: "",
+			promptLines.length > 0 ? ["Attachments:", ...promptLines].join("\n") : "",
 	};
 }
 
@@ -1270,8 +1271,12 @@ async function pruneInactiveTemporarySessions(sessions: Session[]) {
 	}
 
 	const expiredIds = new Set(expiredSessions.map((session) => session.id));
-	const nextSessions = sessions.filter((session) => !expiredIds.has(session.id));
-	await writeSessions(nextSessions.filter((session) => !session.id.startsWith("ambient_")));
+	const nextSessions = sessions.filter(
+		(session) => !expiredIds.has(session.id),
+	);
+	await writeSessions(
+		nextSessions.filter((session) => !session.id.startsWith("ambient_")),
+	);
 	await Promise.all(
 		expiredSessions.map((session) =>
 			session.codexSessionId

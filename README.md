@@ -34,7 +34,44 @@ codex
 
 Then complete sign-in flow with OpenAI account.
 
-Recommended:
+## Installation
+
+### Quick Install
+
+> **Note:** You'll need to manually re-run this command to update the extension when updates are released.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ESHAYAT102/vicinae-codex-extension/refs/heads/main/install.sh | bash
+```
+
+### Manual Install
+
+Clone the repository:
+
+```bash
+git clone https://github.com/ESHAYAT102/vicinae-codex-extension.git
+```
+
+Navigate to the extension directory:
+
+```bash
+cd vicinae-codex-extension
+```
+
+Run the install script:
+
+```bash
+./install.sh
+```
+
+Or run the install and the build command:
+
+```bash
+bun i
+bun dev
+```
+
+## Recommended
 
 - install Caveman skills from [getcaveman.dev](https://getcaveman.dev)
 - extension defaults to `caveman` when skill installed
