@@ -50,15 +50,6 @@
       "placeholder": "gpt-5.4",
       "default": "gpt-5.4",
       "required": true
-    },
-    {
-      "name": "systemPrompt",
-      "title": "Prompt Prefix",
-      "description": "Optional instruction prepended to each Codex request.",
-      "type": "textfield",
-      "placeholder": "You are ChatGPT Codex...",
-      "default": "You are ChatGPT Codex. Answer clearly and helpfully. Read attached local files directly when needed. Do not modify files unless user explicitly asks for edits.",
-      "required": false
     }
   ],
   "scripts": {

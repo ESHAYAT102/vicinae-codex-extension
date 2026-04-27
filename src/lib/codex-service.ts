@@ -12,7 +12,6 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 
 export type Preferences = {
 	openaiModel?: string;
-	systemPrompt?: string;
 };
 
 export type AttachmentSummary = {
@@ -122,8 +121,6 @@ const OUTPUT_DIR = join(environment.supportPath, "outputs");
 const LOCAL_CODEX_BIN = join(process.env.HOME ?? "", ".local", "bin", "codex");
 const DEFAULT_MODEL = "gpt-5.4";
 const DEFAULT_WORK_DIRECTORY = join(process.env.HOME ?? "", "code", "codex");
-const DEFAULT_PROMPT_PREFIX =
-	"You are ChatGPT Codex. Answer clearly and helpfully. Read attached local files directly when needed. Do not modify files unless user explicitly asks for edits.";
 const MAX_TOTAL_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const MAX_FILE_COUNT = 100;
 const SELECTED_MODEL_KEY = "selected-codex-model";
@@ -258,7 +255,6 @@ export async function submitPrompt(
 		model,
 		thinkingLevel: selectedThinking,
 		userPrompt: prompt,
-		promptPrefix: prefs.systemPrompt?.trim() || DEFAULT_PROMPT_PREFIX,
 		selectedSkills,
 		attachments: preparedAttachments,
 		workDirectory,
@@ -470,7 +466,6 @@ async function runCodexPrompt({
 	model,
 	thinkingLevel,
 	userPrompt,
-	promptPrefix,
 	selectedSkills,
 	attachments,
 	workDirectory,
@@ -479,7 +474,6 @@ async function runCodexPrompt({
 	model: string;
 	thinkingLevel?: CodexThinkingLevel;
 	userPrompt: string;
-	promptPrefix: string;
 	selectedSkills: string[];
 	attachments: CodexPreparedAttachments;
 	workDirectory?: string;
@@ -490,7 +484,6 @@ async function runCodexPrompt({
 	const outputFile = join(OUTPUT_DIR, `${createId("codex-output")}.txt`);
 	const prompt = buildCodexPrompt({
 		userPrompt,
-		promptPrefix,
 		selectedSkills,
 		attachmentPromptBlock: attachments.promptBlock,
 	});
@@ -549,7 +542,8 @@ async function runCodexPrompt({
 	const afterIndex = await readCodexSessionIndex(getAmbientCodexHome());
 	const sessionId =
 		existingSession?.codexSessionId ||
-		findNewestCodexSessionId(beforeIndex, afterIndex);
+		findNewestCodexSessionId(beforeIndex, afterIndex) ||
+		(await findMatchingCodexSessionId(beforeIndex, prompt));
 
 	return {
 		lastMessage,
@@ -717,7 +711,7 @@ async function parseAmbientSessionFile(
 		const updatedAt =
 			indexEntry?.updated_at ||
 			findLatestRecordTimestamp(records) ||
-			messages.at(-1)?.createdAt ||
+			messages[messages.length - 1]?.createdAt ||
 			createdAt;
 
 		return {
@@ -791,7 +785,7 @@ function parseAmbientMessages(
 		if (!text) {
 			continue;
 		}
-		const lastMessage = messages.at(-1);
+		const lastMessage = messages[messages.length - 1];
 		if (lastMessage?.role === "assistant" && lastMessage.text === text) {
 			continue;
 		}
@@ -853,7 +847,38 @@ function mergeSessions(localSessions: Session[], ambientSessions: Session[]) {
 
 	for (const localSession of localSessions) {
 		if (!localSession.codexSessionId) {
-			mergedSessions.push(localSession);
+			const matchedAmbientSession = findAmbientMatchForLocalSession(
+				localSession,
+				[...ambientByCodexId.values()],
+			);
+			if (!matchedAmbientSession?.codexSessionId) {
+				mergedSessions.push(localSession);
+				continue;
+			}
+
+			mergedSessions.push({
+				...matchedAmbientSession,
+				...localSession,
+				id: localSession.id,
+				title: localSession.title?.trim() || matchedAmbientSession.title,
+				model: matchedAmbientSession.model || localSession.model,
+				workDirectory:
+					matchedAmbientSession.workDirectory || localSession.workDirectory,
+				codexSessionId: matchedAmbientSession.codexSessionId,
+				createdAt: chooseEarlierDate(
+					localSession.createdAt,
+					matchedAmbientSession.createdAt,
+				),
+				updatedAt: chooseLaterDate(
+					localSession.updatedAt,
+					matchedAmbientSession.updatedAt,
+				),
+				messages:
+					matchedAmbientSession.messages.length > 0
+						? matchedAmbientSession.messages
+						: localSession.messages,
+			});
+			ambientByCodexId.delete(matchedAmbientSession.codexSessionId);
 			continue;
 		}
 
@@ -893,6 +918,56 @@ function mergeSessions(localSessions: Session[], ambientSessions: Session[]) {
 	}
 
 	return mergedSessions;
+}
+
+function findAmbientMatchForLocalSession(
+	localSession: Session,
+	ambientSessions: Session[],
+) {
+	const localUserMessage = localSession.messages.find(
+		(message) => message.role === "user",
+	)?.text;
+	const localAssistantMessage = [...localSession.messages]
+		.reverse()
+		.find((message) => message.role === "assistant")?.text;
+
+	if (!localUserMessage || !localAssistantMessage) {
+		return undefined;
+	}
+
+	return ambientSessions
+		.filter((ambientSession) => {
+			const ambientUserMessage = ambientSession.messages.find(
+				(message) => message.role === "user",
+			)?.text;
+			const ambientAssistantMessage = [...ambientSession.messages]
+				.reverse()
+				.find((message) => message.role === "assistant")?.text;
+
+			if (!ambientUserMessage || !ambientAssistantMessage) {
+				return false;
+			}
+
+			if (!ambientUserMessage.includes(localUserMessage.trim())) {
+				return false;
+			}
+
+			if (ambientAssistantMessage.trim() !== localAssistantMessage.trim()) {
+				return false;
+			}
+
+			return areDatesClose(localSession.createdAt, ambientSession.createdAt);
+		})
+		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+}
+
+function areDatesClose(left: string, right: string, maxDiffMs = 5 * 60 * 1000) {
+	const leftMs = new Date(left).getTime();
+	const rightMs = new Date(right).getTime();
+	if (Number.isNaN(leftMs) || Number.isNaN(rightMs)) {
+		return false;
+	}
+	return Math.abs(leftMs - rightMs) <= maxDiffMs;
 }
 
 function chooseEarlierDate(left: string, right: string) {
@@ -1013,37 +1088,48 @@ async function prepareAttachments(
 		additionalWritableDirs: [...additionalDirs],
 		promptBlock:
 			promptLines.length > 0
-				? [
-						"Attachments available on local filesystem. Read them directly by path.",
-						...promptLines,
-					].join("\n")
+				? ["Attachments:", ...promptLines].join("\n")
 				: "",
 	};
 }
 
 function buildCodexPrompt({
 	userPrompt,
-	promptPrefix,
 	selectedSkills,
 	attachmentPromptBlock,
 }: {
 	userPrompt: string;
-	promptPrefix: string;
 	selectedSkills: string[];
 	attachmentPromptBlock: string;
 }) {
 	return [
-		promptPrefix.trim(),
-		selectedSkills.length > 0
-			? `Preferred skills: ${selectedSkills.join(", ")}. Use them if relevant to this request.`
-			: "",
-		attachmentPromptBlock.trim(),
-		"/compact",
-		"User request:",
+		...selectedSkills.map((skill) => `$${skill}`),
 		userPrompt.trim(),
+		attachmentPromptBlock.trim(),
 	]
 		.filter(Boolean)
 		.join("\n\n");
+}
+
+async function findMatchingCodexSessionId(
+	beforeIndex: CodexIndexEntry[],
+	prompt: string,
+) {
+	const previousIds = new Set(beforeIndex.map((entry) => entry.id));
+	const ambientSessions = await readAmbientCodexSessions();
+
+	return ambientSessions
+		.filter(
+			(session) =>
+				Boolean(session.codexSessionId) &&
+				!previousIds.has(session.codexSessionId as string) &&
+				session.messages.some(
+					(message) =>
+						message.role === "user" && message.text.trim() === prompt.trim(),
+				),
+		)
+		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+		?.codexSessionId;
 }
 
 async function normalizeSelectedSkills(skills: string[]) {

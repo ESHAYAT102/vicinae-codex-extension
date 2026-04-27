@@ -10,7 +10,7 @@ import {
 	Toast,
 	useNavigation,
 } from "@vicinae/api";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	clearSelectedModel,
 	clearSelectedThinking,
@@ -55,8 +55,12 @@ export function AskCodexForm({ defaultSessionId, draftValues }: AskFormProps) {
 	const [selectedSkills, setSelectedSkills] = useState<string[]>(
 		draftValues?.skills ?? [],
 	);
+	const [promptValue, setPromptValue] = useState(draftValues?.prompt ?? "");
+	const [promptError, setPromptError] = useState<string>();
 	const [defaultSkills, setDefaultSkills] = useState<string[]>([]);
 	const [isFormReady, setIsFormReady] = useState(false);
+	const [isSubmitting, setIsSubmitting] = useState(false);
+	const isSubmittingRef = useRef(false);
 	const isReply = Boolean(defaultSessionId);
 
 	useEffect(() => {
@@ -97,23 +101,37 @@ export function AskCodexForm({ defaultSessionId, draftValues }: AskFormProps) {
 	return (
 		<Form
 			enableDrafts
-			isLoading={!isFormReady}
+			isLoading={!isFormReady || isSubmitting}
 			navigationTitle={isReply ? "Chat in Session" : "Chat"}
 			actions={
 				<ActionPanel>
 					<Action.SubmitForm
 						title={isReply ? "Send Follow-up" : "Start Chat"}
 						onSubmit={async (input) => {
+							if (isSubmittingRef.current) {
+								return;
+							}
+
+							const formValues = input as unknown as ComposeFormValues;
+							const nextPrompt = formValues.prompt?.trim() ?? promptValue.trim();
+							if (!nextPrompt) {
+								setPromptError("Write message first.");
+								return false;
+							}
+
+							isSubmittingRef.current = true;
+							setIsSubmitting(true);
+							setPromptError(undefined);
 							const toast = await showToast({
 								style: Toast.Style.Animated,
 								title: isReply ? "Sending follow-up" : "Starting chat",
 							});
 
 							try {
-								const formValues = input as unknown as ComposeFormValues;
 								const nextSession = await submitPrompt(
 									{
 										...formValues,
+										prompt: nextPrompt,
 										skills:
 											selectedSkills.length > 0
 												? selectedSkills
@@ -132,6 +150,9 @@ export function AskCodexForm({ defaultSessionId, draftValues }: AskFormProps) {
 								toast.message = getErrorMessage(error);
 								await toast.update();
 								throw error;
+							} finally {
+								isSubmittingRef.current = false;
+								setIsSubmitting(false);
 							}
 						}}
 					/>
@@ -165,8 +186,18 @@ export function AskCodexForm({ defaultSessionId, draftValues }: AskFormProps) {
 				id="prompt"
 				title="Question"
 				autoFocus
-				defaultValue={draftValues?.prompt}
 				placeholder="Type your message here..."
+				error={promptError}
+				value={promptValue}
+				onChange={(value) => {
+					if (isSubmitting) {
+						return;
+					}
+					if (promptError && value.trim()) {
+						setPromptError(undefined);
+					}
+					setPromptValue(value);
+				}}
 			/>
 			{!isReply ? (
 				<Form.TextField

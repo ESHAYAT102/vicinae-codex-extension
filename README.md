@@ -61,7 +61,7 @@ Behavior:
 - follow-up prompts reuse saved session work directory
 - follow-up form hides session-title and work-directory fields
 - `caveman` auto-selected by default if installed
-- `/compact` auto-injected into every prompt
+- selected skills sent as `$skill-name` directives before prompt
 
 ### `Sessions`
 
@@ -152,9 +152,7 @@ Follow-up:
 
 Prompt payload includes:
 
-- prompt prefix from preferences
 - selected skills
-- `/compact`
 - attachment context
 
 ## Preferences
@@ -162,7 +160,6 @@ Prompt payload includes:
 Extension preferences:
 
 - `Model`
-- `Prompt Prefix`
 
 ## Development
 

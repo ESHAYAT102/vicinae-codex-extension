@@ -8,9 +8,6 @@
 type ExtensionPreferences = {
   /** Model - Default Codex model for new requests. */
 	"openaiModel"?: string;
-
-	/** Prompt Prefix - Optional instruction prepended to each Codex request. */
-	"systemPrompt": string;
 }
 
 declare type Preferences = ExtensionPreferences
