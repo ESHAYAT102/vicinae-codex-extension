@@ -906,57 +906,51 @@ function SessionActions({
 				icon={Icon.ArrowClockwise}
 				onAction={onEnter}
 			/>
-			{session.isTemporary ? null : (
-				<Action title="Rename Session" icon={Icon.Pencil} onAction={onRename} />
-			)}
-			{session.isTemporary ? null : (
-				<Action
-					title={session.archivedAt ? "Unarchive Session" : "Archive Session"}
-					icon={session.archivedAt ? Icon.ArrowClockwise : Icon.Box}
-					onAction={async () => {
-						await setSessionArchived(session.id, !session.archivedAt);
-						await showToast({
-							style: Toast.Style.Success,
-							title: session.archivedAt
-								? "Session restored"
-								: "Session archived",
-							message: session.title,
-						});
-						await onRefresh();
-					}}
-				/>
-			)}
-			{session.isTemporary ? null : (
-				<Action
-					title="Delete Permanently"
-					icon={Icon.Trash}
-					style={Action.Style.Destructive}
-					onAction={async () => {
-						const confirmed = await confirmAlert({
-							title: `Delete "${session.title}" permanently?`,
-							message:
-								"This removes session from Vicinae storage and also deletes matching Codex session artifacts when found.",
-							primaryAction: {
-								title: "Delete Permanently",
-								style: Alert.ActionStyle.Destructive,
-							},
-						});
-						if (!confirmed) {
-							return;
-						}
-						await deleteSessionPermanently(session.id);
-						await showToast({
-							style: Toast.Style.Success,
-							title: "Session deleted",
-							message: session.title,
-						});
-						if (onDeleted) {
-							onDeleted();
-						}
-						await onRefresh();
-					}}
-				/>
-			)}
+			<Action title="Rename Session" icon={Icon.Pencil} onAction={onRename} />
+			<Action
+				title={session.archivedAt ? "Unarchive Session" : "Archive Session"}
+				icon={session.archivedAt ? Icon.ArrowClockwise : Icon.Box}
+				onAction={async () => {
+					await setSessionArchived(session.id, !session.archivedAt);
+					await showToast({
+						style: Toast.Style.Success,
+						title: session.archivedAt
+							? "Session restored"
+							: "Session archived",
+						message: session.title,
+					});
+					await onRefresh();
+				}}
+			/>
+			<Action
+				title="Delete Permanently"
+				icon={Icon.Trash}
+				style={Action.Style.Destructive}
+				onAction={async () => {
+					const confirmed = await confirmAlert({
+						title: `Delete "${session.title}" permanently?`,
+						message:
+							"This removes session from Vicinae storage and also deletes matching Codex session artifacts when found.",
+						primaryAction: {
+							title: "Delete Permanently",
+							style: Alert.ActionStyle.Destructive,
+						},
+					});
+					if (!confirmed) {
+						return;
+					}
+					await deleteSessionPermanently(session.id);
+					await showToast({
+						style: Toast.Style.Success,
+						title: "Session deleted",
+						message: session.title,
+					});
+					if (onDeleted) {
+						onDeleted();
+					}
+					await onRefresh();
+				}}
+			/>
 			<Action.CopyToClipboard
 				title="Copy Transcript"
 				content={renderTranscriptMarkdown(session)}
