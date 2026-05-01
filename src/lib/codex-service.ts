@@ -8,7 +8,14 @@ import {
 	stat,
 	writeFile,
 } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import {
+	basename,
+	delimiter,
+	dirname,
+	extname,
+	join,
+	resolve,
+} from "node:path";
 
 export type Preferences = {
 	openaiModel?: string;
@@ -126,8 +133,10 @@ type AmbientSessionRecord = {
 const STORAGE_FILE = join(environment.supportPath, "sessions.json");
 const OUTPUT_DIR = join(environment.supportPath, "outputs");
 const LOCAL_CODEX_BIN = join(process.env.HOME ?? "", ".local", "bin", "codex");
+const NPM_NPX_CACHE_DIR = join(process.env.HOME ?? "", ".npm", "_npx");
 const DEFAULT_MODEL = "gpt-5.4";
 const DEFAULT_WORK_DIRECTORY = join(process.env.HOME ?? "", "code", "codex");
+const CODEX_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_TOTAL_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const MAX_FILE_COUNT = 100;
 const SELECTED_MODEL_KEY = "selected-codex-model";
@@ -232,23 +241,26 @@ export async function deleteTemporarySession(session?: Session) {
 export async function submitPrompt(
 	values: ComposeFormValues,
 	targetSession?: string | Session,
+	onProgress?: (message: string) => void | Promise<void>,
 ): Promise<Session> {
 	const prompt = values.prompt.trim();
 	if (!prompt) {
 		throw new Error("Add prompt before sending.");
 	}
 
-	const sessions = await readSessions();
+	await reportProgress(onProgress, "Reading sessions");
+	const sessions = await withTimeout(readSessions(), "Reading sessions", 30_000);
 	const existingSession =
 		typeof targetSession === "string"
 			? sessions.find((session) => session.id === targetSession)
 			: targetSession;
 	const prefs = readPreferences();
-	const [selectedModel, selectedThinking, settings] = await Promise.all([
-		getSelectedModel(),
-		getSelectedThinking(),
-		getChatSettings(),
-	]);
+	await reportProgress(onProgress, "Loading settings");
+	const [selectedModel, selectedThinking, settings] = await withTimeout(
+		Promise.all([getSelectedModel(), getSelectedThinking(), getChatSettings()]),
+		"Loading settings",
+		30_000,
+	);
 	const model =
 		selectedModel ||
 		prefs.openaiModel?.trim() ||
@@ -258,15 +270,34 @@ export async function submitPrompt(
 		values.title?.trim() ||
 		existingSession?.title ||
 		makeTitleFromPrompt(prompt);
-	const workDirectory = await validateWorkDirectory(
-		values.workDirectory?.trim() ||
-			existingSession?.workDirectory ||
-			DEFAULT_WORK_DIRECTORY,
+	await reportProgress(onProgress, "Preparing work directory");
+	const workDirectory = await withTimeout(
+		validateWorkDirectory(
+			values.workDirectory?.trim() ||
+				existingSession?.workDirectory ||
+				DEFAULT_WORK_DIRECTORY,
+		),
+		"Preparing work directory",
+		30_000,
 	);
 
-	const expandedPaths = await expandAttachmentPaths(values.attachments ?? []);
-	const preparedAttachments = await prepareAttachments(expandedPaths);
-	const selectedSkills = await normalizeSelectedSkills(values.skills ?? []);
+	await reportProgress(onProgress, "Preparing attachments");
+	const expandedPaths = await withTimeout(
+		expandAttachmentPaths(values.attachments ?? []),
+		"Preparing attachments",
+		30_000,
+	);
+	const preparedAttachments = await withTimeout(
+		prepareAttachments(expandedPaths),
+		"Reading attachments",
+		30_000,
+	);
+	await reportProgress(onProgress, "Loading skills");
+	const selectedSkills = await withTimeout(
+		normalizeSelectedSkills(values.skills ?? []),
+		"Loading skills",
+		30_000,
+	);
 
 	const userMessage: SessionMessage = {
 		id: createId("msg"),
@@ -276,6 +307,7 @@ export async function submitPrompt(
 		attachments: preparedAttachments.summaries,
 	};
 
+	await reportProgress(onProgress, "Launching Codex CLI");
 	const runResult = await runCodexPrompt({
 		existingSession,
 		model,
@@ -285,6 +317,7 @@ export async function submitPrompt(
 		systemPrompt: settings.systemPrompt,
 		attachments: preparedAttachments,
 		workDirectory,
+		onProgress,
 	});
 
 	const assistantMessage: SessionMessage = {
@@ -325,6 +358,7 @@ export async function submitPrompt(
 				)
 			: [nextSession, ...sessions]
 		: [nextSession, ...sessions];
+	await reportProgress(onProgress, "Saving session");
 	await writeSessions(nextSessions);
 
 	return nextSession;
@@ -557,6 +591,7 @@ async function runCodexPrompt({
 	systemPrompt,
 	attachments,
 	workDirectory,
+	onProgress,
 }: {
 	existingSession?: Session;
 	model: string;
@@ -566,6 +601,7 @@ async function runCodexPrompt({
 	systemPrompt?: string;
 	attachments: CodexPreparedAttachments;
 	workDirectory?: string;
+	onProgress?: (message: string) => void | Promise<void>;
 }): Promise<CodexRunResult> {
 	await mkdir(OUTPUT_DIR, { recursive: true });
 
@@ -578,55 +614,33 @@ async function runCodexPrompt({
 		attachmentPromptBlock: attachments.promptBlock,
 	});
 
-	const args = existingSession?.codexSessionId
-		? [
-				"exec",
-				"resume",
-				"--skip-git-repo-check",
-				"--full-auto",
-				"-s",
-				"read-only",
-				"-o",
-				outputFile,
-				"-m",
-				model,
-				...(thinkingLevel
-					? ["-c", `model_reasoning_effort="${thinkingLevel}"`]
-					: []),
-				"-C",
-				workDirectory || process.cwd(),
-				...attachments.imagePaths.flatMap((imagePath) => ["-i", imagePath]),
-				...attachments.additionalWritableDirs.flatMap((dirPath) => [
-					"--add-dir",
-					dirPath,
-				]),
-				existingSession.codexSessionId,
-				prompt,
-			]
-		: [
-				"exec",
-				"--skip-git-repo-check",
-				"--full-auto",
-				"-s",
-				"read-only",
-				"-o",
-				outputFile,
-				"-m",
-				model,
-				...(thinkingLevel
-					? ["-c", `model_reasoning_effort="${thinkingLevel}"`]
-					: []),
-				"-C",
-				workDirectory || process.cwd(),
-				...attachments.imagePaths.flatMap((imagePath) => ["-i", imagePath]),
-				...attachments.additionalWritableDirs.flatMap((dirPath) => [
-					"--add-dir",
-					dirPath,
-				]),
-				prompt,
-			];
+	const execArgs = [
+		"exec",
+		"--skip-git-repo-check",
+		"--full-auto",
+		"-s",
+		"read-only",
+		"-o",
+		outputFile,
+		"-m",
+		model,
+		...(thinkingLevel
+			? ["-c", `model_reasoning_effort="${thinkingLevel}"`]
+			: []),
+		"-C",
+		workDirectory || process.cwd(),
+		...attachments.imagePaths.flatMap((imagePath) => ["-i", imagePath]),
+		...attachments.additionalWritableDirs.flatMap((dirPath) => [
+			"--add-dir",
+			dirPath,
+		]),
+	];
 
-	await spawnCodex(args);
+	const args = existingSession?.codexSessionId
+		? [...execArgs, "resume", existingSession.codexSessionId, prompt]
+		: [...execArgs, prompt];
+
+	await spawnCodex(args, onProgress);
 
 	const lastMessage = await readFile(outputFile, "utf8").catch(() => "");
 	const afterIndex = await readCodexSessionIndex(getAmbientCodexHome());
@@ -642,17 +656,38 @@ async function runCodexPrompt({
 	};
 }
 
-async function spawnCodex(args: string[]) {
+async function spawnCodex(
+	args: string[],
+	onProgress?: (message: string) => void | Promise<void>,
+) {
 	const codexBinaryPath = await getCodexBinaryPath();
+	await reportProgress(onProgress, `Codex binary: ${codexBinaryPath}`);
 
 	return new Promise<void>((resolve, reject) => {
 		const child = spawn(codexBinaryPath, args, {
-			env: process.env,
+			detached: process.platform !== "win32",
+			env: buildCodexEnvironment(),
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 
 		let stderr = "";
 		let stdout = "";
+		let didTimeout = false;
+		let isSettled = false;
+		const timeout = setTimeout(() => {
+			didTimeout = true;
+			if (child.pid) {
+				try {
+					if (process.platform === "win32") {
+						child.kill("SIGTERM");
+					} else {
+						process.kill(-child.pid, "SIGTERM");
+					}
+				} catch {
+					child.kill("SIGTERM");
+				}
+			}
+		}, CODEX_TIMEOUT_MS);
 
 		child.stdout.on("data", (chunk) => {
 			stdout += chunk.toString();
@@ -661,6 +696,11 @@ async function spawnCodex(args: string[]) {
 			stderr += chunk.toString();
 		});
 		child.on("error", (error) => {
+			if (isSettled) {
+				return;
+			}
+			isSettled = true;
+			clearTimeout(timeout);
 			if ("code" in error && error.code === "ENOENT") {
 				reject(
 					new Error(
@@ -677,6 +717,29 @@ async function spawnCodex(args: string[]) {
 			reject(error);
 		});
 		child.on("close", (code) => {
+			if (isSettled) {
+				return;
+			}
+			isSettled = true;
+			clearTimeout(timeout);
+			if (didTimeout) {
+				const detail = [stderr.trim(), stdout.trim()]
+					.filter(Boolean)
+					.join("\n")
+					.trim();
+				reject(
+					new Error(
+						[
+							`Codex CLI did not finish within ${Math.round(CODEX_TIMEOUT_MS / 60000)} minutes.`,
+							"Check that `codex exec` works from a terminal, or set CODEX_BIN to a non-interactive Codex binary.",
+							detail,
+						]
+							.filter(Boolean)
+							.join("\n"),
+					),
+				);
+				return;
+			}
 			if (code === 0) {
 				resolve();
 				return;
@@ -699,12 +762,139 @@ async function getCodexBinaryPath() {
 		return configuredBinary;
 	}
 
+	const pathBinary = await findExecutableOnPath("codex");
+	if (pathBinary && pathBinary !== LOCAL_CODEX_BIN) {
+		return pathBinary;
+	}
+
+	const cachedBinary = await findCachedNpxCodexBinary();
+	if (cachedBinary) {
+		return cachedBinary;
+	}
+
+	if (pathBinary) {
+		return pathBinary;
+	}
+
 	try {
 		await stat(LOCAL_CODEX_BIN);
 		return LOCAL_CODEX_BIN;
 	} catch {
 		return "codex";
 	}
+}
+
+async function findExecutableOnPath(binaryName: string) {
+	for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+		if (!directory) {
+			continue;
+		}
+		const candidate = join(directory, binaryName);
+		try {
+			const candidateStats = await stat(candidate);
+			if (candidateStats.isFile()) {
+				return candidate;
+			}
+		} catch {
+			// Keep searching PATH.
+		}
+	}
+	return undefined;
+}
+
+async function findCachedNpxCodexBinary() {
+	try {
+		const cacheEntries = await readdir(NPM_NPX_CACHE_DIR, {
+			withFileTypes: true,
+		});
+		const candidateRoots = await Promise.all(
+			cacheEntries
+				.filter((entry) => entry.isDirectory())
+				.map(async (entry) => {
+					const root = join(NPM_NPX_CACHE_DIR, entry.name);
+					const rootStats = await stat(root);
+					return { root, mtimeMs: rootStats.mtimeMs };
+				}),
+		);
+
+		for (const { root } of candidateRoots.sort(
+			(left, right) => right.mtimeMs - left.mtimeMs,
+		)) {
+			for (const candidate of getCachedCodexCandidates(root)) {
+				try {
+					const candidateStats = await stat(candidate);
+					if (candidateStats.isFile()) {
+						return candidate;
+					}
+				} catch {
+					// Try next candidate.
+				}
+			}
+		}
+	} catch {
+		return undefined;
+	}
+
+	return undefined;
+}
+
+function getCachedCodexCandidates(cacheRoot: string) {
+	const candidates = [
+		join(cacheRoot, "node_modules", ".bin", "codex"),
+		join(cacheRoot, "node_modules", "@openai", "codex", "bin", "codex.js"),
+	];
+
+	if (process.platform === "linux" && process.arch === "x64") {
+		candidates.unshift(
+			join(
+				cacheRoot,
+				"node_modules",
+				"@openai",
+				"codex-linux-x64",
+				"vendor",
+				"x86_64-unknown-linux-musl",
+				"codex",
+				"codex",
+			),
+		);
+	}
+
+	if (process.platform === "linux" && process.arch === "arm64") {
+		candidates.unshift(
+			join(
+				cacheRoot,
+				"node_modules",
+				"@openai",
+				"codex-linux-arm64",
+				"vendor",
+				"aarch64-unknown-linux-musl",
+				"codex",
+				"codex",
+			),
+		);
+	}
+
+	return candidates;
+}
+
+function buildCodexEnvironment() {
+	const commonPaths = [
+		join(process.env.HOME ?? "", ".local", "bin"),
+		join(process.env.HOME ?? "", ".npm", "_npx"),
+		"/usr/local/bin",
+		"/usr/bin",
+		"/bin",
+	];
+	const pathEntries = [
+		...(process.env.PATH ?? "").split(delimiter).filter(Boolean),
+		...commonPaths,
+	];
+
+	return {
+		...process.env,
+		CODEX_HOME: getAmbientCodexHome(),
+		PATH: [...new Set(pathEntries)].join(delimiter),
+	};
 }
 
 function getAmbientCodexHome() {
@@ -1241,6 +1431,39 @@ async function normalizeSelectedSkills(skills: string[]) {
 	}
 
 	return await getDefaultSkillSelections();
+}
+
+async function reportProgress(
+	onProgress: ((message: string) => void | Promise<void>) | undefined,
+	message: string,
+) {
+	await onProgress?.(message);
+}
+
+async function withTimeout<T>(
+	promise: Promise<T>,
+	label: string,
+	timeoutMs: number,
+) {
+	let timeout: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(() => {
+					reject(
+						new Error(
+							`${label} did not finish within ${Math.round(timeoutMs / 1000)} seconds.`,
+						),
+					);
+				}, timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timeout) {
+			clearTimeout(timeout);
+		}
+	}
 }
 
 function parseStoredStringArray(raw: string | undefined) {
