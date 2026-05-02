@@ -151,6 +151,13 @@ const SKILL_ROOTS = [
 	join(process.env.HOME ?? "", ".codex", "skills"),
 	join(process.env.HOME ?? "", ".agents", "skills"),
 ];
+const PREFERRED_MODEL_SLUGS = [
+	"gpt-5.3-codex",
+	"gpt-5.3-codex-spark",
+	"gpt-5.4-mini",
+	"gpt-5.5",
+	"gpt-5.5-pro",
+] as const;
 
 export async function readSessions(): Promise<Session[]> {
 	const [storedSessions, ambientSessions] = await Promise.all([
@@ -256,8 +263,13 @@ export async function submitPrompt(
 			: targetSession;
 	const prefs = readPreferences();
 	await reportProgress(onProgress, "Loading settings");
-	const [selectedModel, selectedThinking, settings] = await withTimeout(
-		Promise.all([getSelectedModel(), getSelectedThinking(), getChatSettings()]),
+	const [selectedModel, selectedThinking, settings, availableModels] = await withTimeout(
+		Promise.all([
+			getSelectedModel(),
+			getSelectedThinking(),
+			getChatSettings(),
+			getAvailableModels(),
+		]),
 		"Loading settings",
 		30_000,
 	);
@@ -265,6 +277,7 @@ export async function submitPrompt(
 		selectedModel ||
 		prefs.openaiModel?.trim() ||
 		existingSession?.model ||
+		availableModels[0]?.slug ||
 		DEFAULT_MODEL;
 	const title =
 		values.title?.trim() ||
@@ -302,7 +315,7 @@ export async function submitPrompt(
 	const userMessage: SessionMessage = {
 		id: createId("msg"),
 		role: "user",
-		text: prompt,
+		text: filterSystemPrompt(prompt, settings.systemPrompt, selectedSkills),
 		createdAt: new Date().toISOString(),
 		attachments: preparedAttachments.summaries,
 	};
@@ -380,10 +393,12 @@ export function renderTranscriptMarkdown(session: Session) {
 					: "";
 
 			if (message.role === "user") {
+				const text = stripLeadingPromptDirectives(message.text).trim();
+				if (!text) {
+					return null;
+				}
 				return [
-					...escapeMarkdown(message.text)
-						.split("\n")
-						.map((line) => `> ${line}`),
+					...text.split("\n").map((line) => `> ${line}`),
 					attachmentBlock,
 				]
 					.filter(Boolean)
@@ -394,9 +409,76 @@ export function renderTranscriptMarkdown(session: Session) {
 				.filter(Boolean)
 				.join("\n");
 		})
+		.filter(Boolean)
 		.join("\n\n---\n\n");
 
 	return transcript || "_No messages yet._";
+}
+
+function filterSystemPrompt(
+	prompt: string,
+	systemPrompt: string,
+	selectedSkills: string[],
+): string {
+	const normalizedSystemPrompt = systemPrompt.trim().toLowerCase();
+	const normalizedSkills = new Set(
+		selectedSkills.map((skill) => `$${skill.trim().toLowerCase()}`),
+	);
+
+	const lines = prompt.split("\n");
+	let startIndex = 0;
+	while (startIndex < lines.length) {
+		const trimmed = lines[startIndex].trim();
+		if (!trimmed) {
+			startIndex += 1;
+			continue;
+		}
+
+		const normalized = trimmed.toLowerCase();
+		if (
+			normalized === "system instructions:" ||
+			normalized === normalizedSystemPrompt ||
+			normalizedSkills.has(normalized)
+		) {
+			startIndex += 1;
+			continue;
+		}
+		break;
+	}
+
+	return lines.slice(startIndex).join("\n").trim();
+}
+
+function stripLeadingPromptDirectives(text: string): string {
+	const lines = text.split("\n");
+	let startIndex = 0;
+
+	while (startIndex < lines.length) {
+		const trimmed = lines[startIndex].trim();
+		if (!trimmed) {
+			startIndex += 1;
+			continue;
+		}
+
+		const normalized = trimmed.toLowerCase();
+		const compact = normalized.replace(/[`*_]/g, "");
+		const isSystemInstructionLine =
+			compact === "system instructions:" ||
+			compact.startsWith("system instructions:");
+		const isSkillDirective = compact.startsWith("$");
+		const isNpmBunDirective =
+			compact.includes("npm") &&
+			compact.includes("bun") &&
+			(compact.startsWith("if the task") || compact.startsWith("if the tasks"));
+
+		if (isSystemInstructionLine || isSkillDirective || isNpmBunDirective) {
+			startIndex += 1;
+			continue;
+		}
+		break;
+	}
+
+	return lines.slice(startIndex).join("\n");
 }
 
 export function formatDate(value: string) {
@@ -408,6 +490,70 @@ export function getErrorMessage(error: unknown) {
 }
 
 export async function getAvailableModels(): Promise<CodexModel[]> {
+	const models =
+		(await readModelsFromCodexCli()) ?? (await readModelsFromCache()) ?? [];
+	const modelsBySlug = new Map(models.map((model) => [model.slug, model]));
+
+	return PREFERRED_MODEL_SLUGS.map((slug) => {
+		const fromCatalog = modelsBySlug.get(slug);
+		if (fromCatalog) {
+			return fromCatalog;
+		}
+
+		return {
+			slug,
+			displayName: formatModelDisplayName(slug),
+			reasoningLevels: getThinkingOptions(),
+		};
+	});
+}
+
+async function readModelsFromCodexCli(): Promise<CodexModel[] | undefined> {
+	try {
+		const codexBinaryPath = await getCodexBinaryPath();
+		const output = await new Promise<string>((resolve, reject) => {
+			const child = spawn(codexBinaryPath, ["debug", "models"], {
+				env: buildCodexEnvironment(),
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+
+			let stdout = "";
+			let stderr = "";
+			child.stdout.on("data", (chunk) => {
+				stdout += chunk.toString();
+			});
+			child.stderr.on("data", (chunk) => {
+				stderr += chunk.toString();
+			});
+			child.on("error", reject);
+			child.on("close", (code) => {
+				if (code === 0) {
+					resolve(stdout);
+					return;
+				}
+				reject(new Error(stderr.trim() || stdout.trim()));
+			});
+		});
+
+		const parsed = JSON.parse(output) as {
+			models?: Array<{
+				slug?: string;
+				display_name?: string;
+				description?: string;
+				visibility?: string;
+				supported_in_api?: boolean;
+				context_window?: number;
+				supported_reasoning_levels?: Array<{ effort?: string }>;
+			}>;
+		};
+
+		return normalizeCodexModels(parsed.models ?? []);
+	} catch {
+		return undefined;
+	}
+}
+
+async function readModelsFromCache(): Promise<CodexModel[] | undefined> {
 	const modelsCachePath = join(getAmbientCodexHome(), "models_cache.json");
 	try {
 		const raw = await readFile(modelsCachePath, "utf8");
@@ -422,24 +568,44 @@ export async function getAvailableModels(): Promise<CodexModel[]> {
 				supported_reasoning_levels?: Array<{ effort?: string }>;
 			}>;
 		};
-		return (parsed.models ?? [])
-			.filter((model) => typeof model.slug === "string")
-			.map((model) => ({
-				slug: model.slug as string,
-				displayName: model.display_name || model.slug || "Unknown",
-				description: model.description,
-				visibility: model.visibility,
-				supportedInApi: model.supported_in_api,
-				contextWindow: model.context_window,
-				reasoningLevels: (model.supported_reasoning_levels ?? [])
-					.map((item) => item.effort)
-					.filter((value): value is string => Boolean(value)),
-			}))
-			.filter((model) => model.visibility !== "hidden")
-			.sort((a, b) => a.displayName.localeCompare(b.displayName));
+		return normalizeCodexModels(parsed.models ?? []);
 	} catch {
-		return [];
+		return undefined;
 	}
+}
+
+function normalizeCodexModels(
+	models: Array<{
+		slug?: string;
+		display_name?: string;
+		description?: string;
+		visibility?: string;
+		supported_in_api?: boolean;
+		context_window?: number;
+		supported_reasoning_levels?: Array<{ effort?: string }>;
+	}>,
+) {
+	return models
+		.filter((model) => typeof model.slug === "string")
+		.map((model) => ({
+			slug: model.slug as string,
+			displayName: model.display_name || model.slug || "Unknown",
+			description: model.description,
+			visibility: model.visibility,
+			supportedInApi: model.supported_in_api,
+			contextWindow: model.context_window,
+			reasoningLevels: (model.supported_reasoning_levels ?? [])
+				.map((item) => item.effort)
+				.filter((value): value is string => Boolean(value)),
+		}))
+		.filter((model) => model.visibility !== "hidden");
+}
+
+function formatModelDisplayName(slug: string) {
+	return slug
+		.split("-")
+		.map((part) => part.toUpperCase())
+		.join(" ");
 }
 
 export async function getAvailableSkills(): Promise<string[]> {

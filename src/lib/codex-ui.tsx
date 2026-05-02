@@ -285,6 +285,7 @@ export function SessionsBrowser() {
 	const { push } = useNavigation();
 	const [sessions, setSessions] = useState<Session[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
+	const [hasInitiallyLoaded, setHasInitiallyLoaded] = useState(false);
 
 	async function loadState() {
 		setIsLoading(true);
@@ -296,8 +297,12 @@ export function SessionsBrowser() {
 	}
 
 	useEffect(() => {
+		if (hasInitiallyLoaded) {
+			return;
+		}
+		setHasInitiallyLoaded(true);
 		void loadState();
-	}, []);
+	}, [hasInitiallyLoaded]);
 
 	const activeSessions = sessions.filter((session) => !session.archivedAt);
 	const archivedSessions = sessions.filter((session) =>
@@ -381,16 +386,17 @@ export function SessionsBrowser() {
 							icon={Icon.Openai}
 							title={session.title}
 							detail={<SessionListDetail session={session} />}
-							actions={
-								<SessionActions
-									session={session}
-									onRefresh={loadState}
-									onEnter={() =>
-										push(<SessionDetailScreen sessionId={session.id} />)
-									}
-									onReply={() =>
-										push(<AskCodexForm defaultSessionId={session.id} />)
-									}
+								actions={
+									<SessionActions
+										session={session}
+										onRefresh={loadState}
+										onEnter={() =>
+											push(<SessionDetailScreen sessionId={session.id} />)
+										}
+										preferEnterToOpenSession
+										onReply={() =>
+											push(<AskCodexForm defaultSessionId={session.id} />)
+										}
 									onRename={() =>
 										push(
 											<RenameSessionForm
@@ -415,16 +421,17 @@ export function SessionsBrowser() {
 							icon={Icon.Box}
 							title={session.title}
 							detail={<SessionListDetail session={session} />}
-							actions={
-								<SessionActions
-									session={session}
-									onRefresh={loadState}
-									onEnter={() =>
-										push(<SessionDetailScreen sessionId={session.id} />)
-									}
-									onReply={() =>
-										push(<AskCodexForm defaultSessionId={session.id} />)
-									}
+								actions={
+									<SessionActions
+										session={session}
+										onRefresh={loadState}
+										onEnter={() =>
+											push(<SessionDetailScreen sessionId={session.id} />)
+										}
+										preferEnterToOpenSession
+										onReply={() =>
+											push(<AskCodexForm defaultSessionId={session.id} />)
+										}
 									onRename={() =>
 										push(
 											<RenameSessionForm
@@ -687,7 +694,7 @@ export function SessionDetailScreen({
 }) {
 	const { push, pop } = useNavigation();
 	const [session, setSession] = useState<Session | undefined>(initialSession);
-	const [isLoading, setIsLoading] = useState(true);
+	const [isLoading, setIsLoading] = useState(!initialSession);
 
 	async function loadSession() {
 		setIsLoading(true);
@@ -700,6 +707,9 @@ export function SessionDetailScreen({
 	}
 
 	useEffect(() => {
+		if (initialSession) {
+			setSession(initialSession);
+		}
 		void loadSession();
 	}, [initialSession, sessionId]);
 
@@ -886,6 +896,7 @@ function SessionActions({
 	onReply,
 	onRename,
 	onDeleted,
+	preferEnterToOpenSession,
 }: {
 	session: Session;
 	onRefresh: () => void | Promise<void>;
@@ -893,19 +904,36 @@ function SessionActions({
 	onReply: () => void;
 	onRename: () => void;
 	onDeleted?: () => void;
+	preferEnterToOpenSession?: boolean;
 }) {
 	return (
 		<ActionPanel>
-			<Action
-				title="Chat Follow-up"
-				icon={Icon.SpeechBubble}
-				onAction={onReply}
-			/>
-			<Action
-				title="Refresh Session"
-				icon={Icon.ArrowClockwise}
-				onAction={onEnter}
-			/>
+			{preferEnterToOpenSession ? (
+				<Action
+					title="Open Chat"
+					icon={Icon.AppWindowList}
+					onAction={onEnter}
+				/>
+			) : (
+				<Action
+					title="Chat Follow-up"
+					icon={Icon.SpeechBubble}
+					onAction={onReply}
+				/>
+			)}
+			{preferEnterToOpenSession ? (
+				<Action
+					title="Chat Follow-up"
+					icon={Icon.SpeechBubble}
+					onAction={onReply}
+				/>
+			) : (
+				<Action
+					title="Refresh Session"
+					icon={Icon.ArrowClockwise}
+					onAction={onEnter}
+				/>
+			)}
 			<Action title="Rename Session" icon={Icon.Pencil} onAction={onRename} />
 			<Action
 				title={session.archivedAt ? "Unarchive Session" : "Archive Session"}
