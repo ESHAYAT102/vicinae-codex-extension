@@ -11,7 +11,7 @@ import {
 	Toast,
 	useNavigation,
 } from "@vicinae/api";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
 	clearSelectedModel,
 	clearSelectedThinking,
@@ -394,9 +394,7 @@ export function SessionsBrowser() {
 											push(<SessionDetailScreen sessionId={session.id} />)
 										}
 										preferEnterToOpenSession
-										onReply={() =>
-											push(<AskCodexForm defaultSessionId={session.id} />)
-										}
+										replyTarget={<AskCodexForm defaultSessionId={session.id} />}
 									onRename={() =>
 										push(
 											<RenameSessionForm
@@ -429,9 +427,7 @@ export function SessionsBrowser() {
 											push(<SessionDetailScreen sessionId={session.id} />)
 										}
 										preferEnterToOpenSession
-										onReply={() =>
-											push(<AskCodexForm defaultSessionId={session.id} />)
-										}
+										replyTarget={<AskCodexForm defaultSessionId={session.id} />}
 									onRename={() =>
 										push(
 											<RenameSessionForm
@@ -740,15 +736,13 @@ export function SessionDetailScreen({
 					session={session}
 					onRefresh={loadSession}
 					onEnter={() => loadSession()}
-					onReply={() => {
-						push(
-							session.isTemporary ? (
-								<AskCodexForm defaultSession={session} />
-							) : (
-								<AskCodexForm defaultSessionId={session.id} />
-							),
-						);
-					}}
+					replyTarget={
+						session.isTemporary ? (
+							<AskCodexForm defaultSession={session} />
+						) : (
+							<AskCodexForm defaultSessionId={session.id} />
+						)
+					}
 					onRename={() =>
 						push(<RenameSessionForm session={session} onSaved={loadSession} />)
 					}
@@ -893,7 +887,7 @@ function SessionActions({
 	session,
 	onRefresh,
 	onEnter,
-	onReply,
+	replyTarget,
 	onRename,
 	onDeleted,
 	preferEnterToOpenSession,
@@ -901,7 +895,7 @@ function SessionActions({
 	session: Session;
 	onRefresh: () => void | Promise<void>;
 	onEnter: () => void;
-	onReply: () => void;
+	replyTarget: ReactNode;
 	onRename: () => void;
 	onDeleted?: () => void;
 	preferEnterToOpenSession?: boolean;
@@ -916,18 +910,18 @@ function SessionActions({
 					onAction={onEnter}
 				/>
 			) : (
-				<Action
+				<Action.Push
 					title="Chat Follow-up"
 					icon={Icon.SpeechBubble}
 					autoFocus
-					onAction={onReply}
+					target={replyTarget}
 				/>
 			)}
 			{preferEnterToOpenSession ? (
-				<Action
+				<Action.Push
 					title="Chat Follow-up"
 					icon={Icon.SpeechBubble}
-					onAction={onReply}
+					target={replyTarget}
 				/>
 			) : (
 				<Action
