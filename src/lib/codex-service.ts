@@ -151,14 +151,6 @@ const SKILL_ROOTS = [
 	join(process.env.HOME ?? "", ".codex", "skills"),
 	join(process.env.HOME ?? "", ".agents", "skills"),
 ];
-const PREFERRED_MODEL_SLUGS = [
-	"gpt-5.3-codex",
-	"gpt-5.3-codex-spark",
-	"gpt-5.4-mini",
-	"gpt-5.5",
-	"gpt-5.5-pro",
-] as const;
-
 export async function readSessions(): Promise<Session[]> {
 	const [storedSessions, ambientSessions] = await Promise.all([
 		readStoredSessions(),
@@ -490,22 +482,7 @@ export function getErrorMessage(error: unknown) {
 }
 
 export async function getAvailableModels(): Promise<CodexModel[]> {
-	const models =
-		(await readModelsFromCodexCli()) ?? (await readModelsFromCache()) ?? [];
-	const modelsBySlug = new Map(models.map((model) => [model.slug, model]));
-
-	return PREFERRED_MODEL_SLUGS.map((slug) => {
-		const fromCatalog = modelsBySlug.get(slug);
-		if (fromCatalog) {
-			return fromCatalog;
-		}
-
-		return {
-			slug,
-			displayName: formatModelDisplayName(slug),
-			reasoningLevels: getThinkingOptions(),
-		};
-	});
+	return (await readModelsFromCodexCli()) ?? (await readModelsFromCache()) ?? [];
 }
 
 async function readModelsFromCodexCli(): Promise<CodexModel[] | undefined> {
@@ -599,13 +576,6 @@ function normalizeCodexModels(
 				.filter((value): value is string => Boolean(value)),
 		}))
 		.filter((model) => model.visibility !== "hidden");
-}
-
-function formatModelDisplayName(slug: string) {
-	return slug
-		.split("-")
-		.map((part) => part.toUpperCase())
-		.join(" ");
 }
 
 export async function getAvailableSkills(): Promise<string[]> {

@@ -116,7 +116,7 @@ Actions:
 
 ### `Models`
 
-Choose default Codex model from local Codex model cache.
+Choose the default model from the live Codex CLI model catalog.
 
 ### `Thinking`
 

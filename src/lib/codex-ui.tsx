@@ -513,7 +513,7 @@ export function ModelsBrowser() {
 				<List.EmptyView
 					icon={Icon.Cog}
 					title="No models found"
-					description="Could not read Codex model cache."
+					description="Could not read the Codex model catalog."
 				/>
 			) : null}
 			<List.Section
