@@ -912,12 +912,14 @@ function SessionActions({
 				<Action
 					title="Open Chat"
 					icon={Icon.AppWindowList}
+					autoFocus
 					onAction={onEnter}
 				/>
 			) : (
 				<Action
 					title="Chat Follow-up"
 					icon={Icon.SpeechBubble}
+					autoFocus
 					onAction={onReply}
 				/>
 			)}
