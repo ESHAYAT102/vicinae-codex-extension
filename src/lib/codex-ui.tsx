@@ -567,6 +567,11 @@ export function ModelsBrowser() {
 										await loadState();
 									}}
 								/>
+								<Action
+									title="Refresh"
+									icon={Icon.ArrowClockwise}
+									onAction={() => loadState()}
+								/>
 								<Action.CopyToClipboard
 									title="Copy Model Slug"
 									content={model.slug}

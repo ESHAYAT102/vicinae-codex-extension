@@ -116,7 +116,7 @@ Actions:
 
 ### `Models`
 
-Choose the default model from the live Codex CLI model catalog.
+Choose the default model from the installed Codex CLI model catalog. Open Models or use Refresh to reload the available options. If the CLI is unavailable or times out, the selector uses the local Codex model cache.
 
 ### `Thinking`
 

@@ -1,5 +1,5 @@
 import { environment, getPreferenceValues, LocalStorage } from "@vicinae/api";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
 	mkdir,
 	readFile,
@@ -482,34 +482,24 @@ export function getErrorMessage(error: unknown) {
 }
 
 export async function getAvailableModels(): Promise<CodexModel[]> {
-	return (await readModelsFromCodexCli()) ?? (await readModelsFromCache()) ?? [];
+	const models = await readModelsFromCodexCli();
+	return models?.length ? models : (await readModelsFromCache()) ?? [];
 }
 
 async function readModelsFromCodexCli(): Promise<CodexModel[] | undefined> {
 	try {
 		const codexBinaryPath = await getCodexBinaryPath();
 		const output = await new Promise<string>((resolve, reject) => {
-			const child = spawn(codexBinaryPath, ["debug", "models"], {
-				env: buildCodexEnvironment(),
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-
-			let stdout = "";
-			let stderr = "";
-			child.stdout.on("data", (chunk) => {
-				stdout += chunk.toString();
-			});
-			child.stderr.on("data", (chunk) => {
-				stderr += chunk.toString();
-			});
-			child.on("error", reject);
-			child.on("close", (code) => {
-				if (code === 0) {
-					resolve(stdout);
-					return;
-				}
-				reject(new Error(stderr.trim() || stdout.trim()));
-			});
+			execFile(
+				codexBinaryPath,
+				["debug", "models"],
+				{
+					env: buildCodexEnvironment(),
+					timeout: 15_000,
+					maxBuffer: 10 * 1024 * 1024,
+				},
+				(error, stdout) => (error ? reject(error) : resolve(stdout)),
+			);
 		});
 
 		const parsed = JSON.parse(output) as {
@@ -899,15 +889,6 @@ async function getCodexBinaryPath() {
 	}
 
 	const pathBinary = await findExecutableOnPath("codex");
-	if (pathBinary && pathBinary !== LOCAL_CODEX_BIN) {
-		return pathBinary;
-	}
-
-	const cachedBinary = await findCachedNpxCodexBinary();
-	if (cachedBinary) {
-		return cachedBinary;
-	}
-
 	if (pathBinary) {
 		return pathBinary;
 	}
@@ -916,7 +897,7 @@ async function getCodexBinaryPath() {
 		await stat(LOCAL_CODEX_BIN);
 		return LOCAL_CODEX_BIN;
 	} catch {
-		return "codex";
+		return (await findCachedNpxCodexBinary()) ?? "codex";
 	}
 }
 
